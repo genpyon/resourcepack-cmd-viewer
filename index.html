@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Minecraft Resource Pack CustomModelData Viewer</title>
+  <style>
+    :root { --bg:#0b0e13; --fg:#e6e9ef; --muted:#9aa1aa; --accent:#5aa7ff; --card:#131821; }
+    html,body{height:100%;}
+    body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans JP",sans-serif}
+    header{padding:20px 16px;border-bottom:1px solid #202734;background:linear-gradient(180deg,#0d1117,#0b0e13)}
+    h1{margin:0;font-size:18px}
+    .sub{color:var(--muted);font-size:12px}
+    main{display:grid;grid-template-columns:clamp(260px,28vw,360px) minmax(0,1fr);gap:16px;padding:16px;box-sizing:border-box}
+    .panel{background:var(--card);border:1px solid #1f2632;border-radius:14px;overflow:hidden}
+    .panel h2{margin:0;padding:12px 14px;border-bottom:1px solid #1f2632;font-size:13px;color:#c7d0dc}
+    .panel .content{padding:12px 14px;box-sizing:border-box;overflow:auto}
+    .drop{border:2px dashed #2a3446;border-radius:12px;padding:18px;text-align:center;color:var(--muted);cursor:pointer;user-select:none}
+    .drop.drag{border-color:var(--accent);color:#c7e1ff;background:#0c1422}
+    input[type="file"]{display:none}
+    .controls{display:grid;gap:12px}
+    label{display:block;font-size:12px;color:#b8c0cc;margin-bottom:6px}
+    select,input[type="text"],button{background:#0e1420;border:1px solid #273043;color:var(--fg);padding:8px 10px;border-radius:10px;min-width:0}
+    button{cursor:pointer;white-space:nowrap}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .row > *{flex:0 0 auto}
+    .row.grow > *:first-child{flex:1 1 auto}
+    .notes{color:var(--muted);font-size:12px}
+    .note-list{margin:6px 0 0 0;padding-left:16px}
+    .note-list li{overflow-wrap:anywhere}
+    .grid{overflow:auto}
+    table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+    th,td{border-bottom:1px solid #1c2431;padding:8px 10px;vertical-align:top}
+    th{position:sticky;top:0;background:#111624;text-align:left;color:#c8d2de;z-index:1}
+    tr:hover{background:#101725}
+    .tag{display:inline-block;padding:2px 6px;border-radius:999px;background:#0e1a2a;border:1px solid #2a3a56;color:#a6c1ff;font-size:11px}
+    .tex{display:flex;gap:8px;flex-wrap:wrap}
+    .thumb{width:32px;height:32px;image-rendering:pixelated;border:1px solid #243049;background:#0c1220;border-radius:4px}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Roboto Mono",monospace;}
+    .muted{color:var(--muted)}
+    .row-err{background:#2a1111}
+    .th-sort{cursor:pointer;user-select:none}
+    .th-sort .dir{opacity:.8;font-size:10px;margin-left:4px}
+    .nowrap{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .cell-model{max-width:440px}
+    .cell-tex{max-width:520px}
+    @media (max-width: 900px){
+      main{grid-template-columns:1fr}
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Resource Pack CustomModelData Viewer <span class="sub">ZIP を読み込み、<code class="mono">CustomModelData</code> / Item Model の対応を一覧化</span></h1>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>入力</h2>
+      <div class="content">
+        <div class="row grow">
+          <label class="nowrap">リソースパック ZIP</label>
+        </div>
+        <div id="drop" class="drop">ここに ZIP をドラッグ＆ドロップ、またはクリックして選択</div>
+        <input id="file" type="file" accept=".zip" />
+        <div style="height:8px"></div>
+        <div class="controls">
+          <div class="row grow">
+            <label class="nowrap">表示</label>
+            <button id="btnExportCsv">CSV 書き出し</button>
+            <button id="btnExportJson">JSON 書き出し</button>
+          </div>
+          <div>
+            <label>フィルタ</label>
+            <input id="filter" type="text" placeholder="item, namespace, model, texture, CMD 値 などで部分一致検索" />
+          </div>
+          <div class="row">
+            <label class="nowrap">画像サムネイル</label>
+            <select id="thumbMode">
+              <option value="first">先頭の1枚のみ</option>
+              <option value="all">すべて表示</option>
+              <option value="none">非表示</option>
+            </select>
+          </div>
+          <div class="notes">
+            対応:
+            <ul class="note-list">
+              <li>1.13–1.21.3 の <code class="mono">models/item/*.json</code> の <code class="mono">overrides.custom_model_data</code></li>
+              <li>1.21.4+ の <code class="mono">items/*.json</code> の <code class="mono">minecraft:select</code> / <code class="mono">range_dispatch</code>（<code class="mono">custom_model_data</code>）</li>
+              <li>OptiFine/CIT（簡易）: <code class="mono">assets/*/(optifine|mcpatcher)/cit/**.properties</code> の <code class="mono">nbt.CustomModelData</code></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel grid">
+      <h2>結果 <span id="summary" class="sub"></span></h2>
+      <div class="content">
+        <table id="tbl">
+          <thead>
+            <tr>
+              <th class="th-sort" data-key="base" style="width:180px">ベースアイテム <span class="dir"></span></th>
+              <th class="th-sort" data-key="cmd" style="width:130px">CMD / ラベル <span class="dir"></span></th>
+              <th class="th-sort cell-model" data-key="modelRef">モデル参照 <span class="dir"></span></th>
+              <th class="cell-tex">テクスチャ</th>
+              <th class="th-sort" data-key="source" style="width:120px">由来 <span class="dir"></span></th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+<script>
+(function(){
+  const drop = document.getElementById('drop');
+  const file = document.getElementById('file');
+  const tbody = document.getElementById('tbody');
+  const summary = document.getElementById('summary');
+  const filter = document.getElementById('filter');
+  const thumbMode = document.getElementById('thumbMode');
+  const btnExportCsv = document.getElementById('btnExportCsv');
+  const btnExportJson = document.getElementById('btnExportJson');
+  const ths = Array.from(document.querySelectorAll('th.th-sort'));
+
+  let rows = []; // collected mappings
+  let zipObj = null; // JSZip instance
+  let sortState = { key: 'base', asc: true };
+
+  // UI wiring
+  drop.addEventListener('click', ()=> file.click());
+  drop.addEventListener('dragover', (e)=>{ e.preventDefault(); drop.classList.add('drag'); });
+  drop.addEventListener('dragleave', ()=> drop.classList.remove('drag'));
+  drop.addEventListener('drop', (e)=>{
+    e.preventDefault(); drop.classList.remove('drag');
+    const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) handleFile(f);
+  });
+  file.addEventListener('change', ()=>{ if (file.files[0]) handleFile(file.files[0]); });
+  filter.addEventListener('input', render);
+  thumbMode.addEventListener('change', render);
+  btnExportCsv.addEventListener('click', ()=> exportCsv(currentView()));
+  btnExportJson.addEventListener('click', ()=> exportJson(currentView()));
+  ths.forEach(th => th.addEventListener('click', ()=> toggleSort(th.dataset.key)));
+
+  function toggleSort(key){
+    if (sortState.key === key) sortState.asc = !sortState.asc;
+    else { sortState.key = key; sortState.asc = true; }
+    render();
+  }
+
+  function handleFile(f){
+    drop.textContent = `${f.name} を読み込み中…`;
+    rows = []; tbody.innerHTML = ''; summary.textContent = '';
+    JSZip.loadAsync(f).then(async z => {
+      zipObj = z;
+      const fileNames = Object.keys(z.files);
+
+      // Collect mappings from: items/*.json (1.21.4+)
+      const itemDefs = fileNames.filter(p => /assets\/.+\/items\/.+\.json$/i.test(p));
+      for (const p of itemDefs) {
+        const base = baseItemFromItemsPath(p);
+        const json = await readJson(z, p);
+        if (!json) continue;
+        const model = json.model || json.item_model || json["minecraft:item_model"] || null;
+        if (model) {
+          await collectFromNewModel(base, model, p);
+        }
+      }
+      // Collect from: models/item/*.json (<=1.21.3)
+      const oldItemModels = fileNames.filter(p => /assets\/.+\/models\/item\/.+\.json$/i.test(p));
+      for (const p of oldItemModels) {
+        const base = baseItemFromOldModelPath(p);
+        const json = await readJson(z, p);
+        if (!json) continue;
+        const overrides = json.overrides; if (!Array.isArray(overrides)) continue;
+        for (const ov of overrides) {
+          const pred = ov && ov.predicate || {};
+          if (pred && (typeof pred.custom_model_data !== 'undefined')) {
+            const cmd = pred.custom_model_data;
+            const modelRef = ov.model;
+            const tex = await resolveTexturesFromModelRef(modelRef, p);
+            pushRow({ base, cmd: String(cmd), modelRef, textures: tex, source: 'models/item overrides', ok: tex.length>0 });
+          }
+        }
+      }
+      // CIT (OptiFine / CIT Resewn) simple scan
+      const citProps = fileNames.filter(p => /assets\/.+\/(optifine|mcpatcher)\/cit\/.+\.properties$/i.test(p));
+      for (const p of citProps) {
+        const txt = await readText(z, p); if (!txt) continue;
+        const m = parseProperties(txt);
+        const items = (m.items || m.matchItems || '').split(/[ ,]+/).filter(Boolean);
+        const cmd = m['nbt.CustomModelData'] || m['nbt.display.CustomModelData'] || '';
+        const modelRef = m.model || '';
+        if (cmd && modelRef) {
+          const tex = await resolveTexturesFromModelRef(modelRef, p);
+          for (const it of items) pushRow({ base: it, cmd: String(cmd), modelRef, textures: tex, source: 'CIT', ok: tex.length>0 });
+        }
+      }
+
+      render();
+      drop.textContent = `読み込み完了: ${rows.length} 件`;
+    }).catch(err => {
+      console.error(err);
+      drop.textContent = '読み込みに失敗しました';
+    });
+  }
+
+  function baseItemFromItemsPath(p){
+    // assets/<ns>/items/<name>.json -> <ns>:<name>
+    const m = p.match(/assets\/([^/]+)\/items\/(.+)\.json$/i);
+    if (!m) return p;
+    const ns = m[1];
+    const name = m[2].replace(/\\/g,'/');
+    return `${ns}:${name}`;
+  }
+  function baseItemFromOldModelPath(p){
+    // assets/<ns>/models/item/<name>.json -> <ns>:<name>
+    const m = p.match(/assets\/([^/]+)\/models\/item\/(.+)\.json$/i);
+    if (!m) return p;
+    const ns = m[1];
+    const name = m[2].replace(/\\/g,'/');
+    return `${ns}:${name}`;
+  }
+
+  async function collectFromNewModel(base, model, fromPath){
+    const type = (model.type || '').toLowerCase();
+    const prop = (model.property || '').toLowerCase();
+    if ((type.includes('select') || type.includes('range_dispatch')) && prop.includes('custom_model_data')) {
+      if (Array.isArray(model.cases)) {
+        for (const c of model.cases) {
+          const when = c.when;
+          const mref = c.model && (c.model.model || c.model);
+          const tex = await resolveTexturesFromModelRef(mref, fromPath);
+          pushRow({ base, cmd: String(when), modelRef: mref, textures: tex, source: 'items/select', ok: tex.length>0 });
+        }
+      }
+      if (Array.isArray(model.entries)) { // range_dispatch
+        for (const e of model.entries) {
+          const thr = e.threshold;
+          const mref = e.model && (e.model.model || e.model);
+          const tex = await resolveTexturesFromModelRef(mref, fromPath);
+          pushRow({ base, cmd: String(thr), modelRef: mref, textures: tex, source: 'items/range_dispatch', ok: tex.length>0 });
+        }
+      }
+    } else if (model.model) {
+      const mref = model.model;
+      const tex = await resolveTexturesFromModelRef(mref, fromPath);
+      pushRow({ base, cmd: '', modelRef: mref, textures: tex, source: 'items/fixed', ok: tex.length>0 });
+    }
+  }
+
+  function parseNSP(s, defaultNS='minecraft'){
+    if (!s) return null;
+    if (typeof s !== 'string') return null;
+    let ns='minecraft', path=s;
+    if (s.includes(':')) { const [n, p] = s.split(':'); ns = n || defaultNS; path = p || ''; }
+    else { ns = defaultNS; path = s; }
+    return { ns, path };
+  }
+
+  async function resolveTexturesFromModelRef(modelRef, fromPath){
+    if (!modelRef) return [];
+    let candidates = [];
+    if (typeof modelRef === 'string') {
+      const rel = modelRef.replace(/^\.\//, '').replace(/\\/g,'/').replace(/^\//,'');
+      if (rel.endsWith('.json')) {
+        // CIT model file relative to the .properties location
+        const baseDir = fromPath.substring(0, fromPath.lastIndexOf('/')+1);
+        const p = baseDir + rel;
+        const json = await readJson(zipObj, p);
+        if (json) return await resolveTexturesFromModelJson(json, p);
+        return [];
+      }
+      const parsed = parseNSP(rel);
+      if (!parsed) return [];
+      const {ns, path} = parsed;
+      if (!ns || !path) return [];
+      const modelPath = `assets/${ns}/models/${path}.json`;
+      const json = await readJson(zipObj, modelPath);
+      if (!json) return [];
+      return await resolveTexturesFromModelJson(json, modelPath);
+    }
+    if (modelRef && typeof modelRef === 'object' && modelRef.model) {
+      return await resolveTexturesFromModelRef(modelRef.model, fromPath);
+    }
+    return [];
+  }
+
+  async function resolveTexturesFromModelJson(json, modelPath, depth=0){
+    if (!json || depth>12) return [];
+    let tex = [];
+    if (json.textures && typeof json.textures === 'object') {
+      for (const k of Object.keys(json.textures)) {
+        const ref = json.textures[k];
+        const t = await textureRefToPngPath(ref, modelPath);
+        if (t) tex.push(t);
+      }
+    }
+    const parent = json.parent;
+    if (parent) {
+      const parsed = parseNSP(parent);
+      if (parsed) {
+        const {ns, path} = parsed;
+        const parentPath = `assets/${ns}/models/${path}.json`;
+        const pjson = await readJson(zipObj, parentPath);
+        const ptex = await resolveTexturesFromModelJson(pjson, parentPath, depth+1);
+        tex = tex.concat(ptex);
+      }
+    }
+    const seen = new Set(); const out = [];
+    for (const t of tex) { if (!seen.has(t)) { seen.add(t); out.push(t); } }
+    return out;
+  }
+
+  async function textureRefToPngPath(ref, fromModelPath){
+    if (!ref || typeof ref !== 'string') return null;
+    if (ref.startsWith('#')) return null;
+    const parsed = parseNSP(ref);
+    if (!parsed) return null;
+    const {ns, path} = parsed;
+    if (!ns || !path) return null;
+    const png = `assets/${ns}/textures/${path}.png`;
+    if (zipObj.files[png]) return png;
+    return null;
+  }
+
+  function pushRow(r){ rows.push({ ...r }); }
+
+  function currentView(){
+    const q = (filter.value || '').toLowerCase();
+    const filtered = rows.filter(r => {
+      const hay = [r.base, r.cmd, r.modelRef, r.source, ...(r.textures||[])].join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+    const key = sortState.key;
+    const asc = sortState.asc ? 1 : -1;
+    const get = (r)=>{
+      switch(key){
+        case 'base': return String(r.base||'');
+        case 'cmd': {
+          const n = Number(r.cmd);
+          return Number.isFinite(n) ? n : String(r.cmd||'');
+        }
+        case 'modelRef': return String(r.modelRef||'');
+        case 'source': return String(r.source||'');
+        default: return '';
+      }
+    };
+    const cmp = (a,b)=>{
+      const va = get(a), vb = get(b);
+      if (typeof va === 'number' && typeof vb === 'number') return asc * (va - vb);
+      return asc * String(va).localeCompare(String(vb), 'ja', {numeric:true,sensitivity:'base'});
+    };
+    return filtered.sort(cmp);
+  }
+
+  async function render(){
+    const view = currentView();
+    tbody.innerHTML = '';
+    const frag = document.createDocumentFragment();
+
+    view.forEach(r => {
+      const tr = document.createElement('tr');
+      if (!r.ok) tr.classList.add('row-err');
+      // base
+      const tdBase = document.createElement('td');
+      tdBase.innerHTML = `<span class="tag mono">${escapeHtml(r.base||'')}</span>`;
+      tr.appendChild(tdBase);
+      // cmd
+      const tdCmd = document.createElement('td');
+      tdCmd.innerHTML = `<span class="mono">${escapeHtml(r.cmd||'')}</span>`;
+      tr.appendChild(tdCmd);
+      // model
+      const tdModel = document.createElement('td');
+      tdModel.className = 'cell-model';
+      tdModel.innerHTML = `<div class="mono nowrap" title="${escapeHtml(String(r.modelRef||''))}">${escapeHtml(String(r.modelRef||''))}</div>`;
+      tr.appendChild(tdModel);
+      // textures
+      const tdTex = document.createElement('td');
+      tdTex.className = 'cell-tex';
+      const texWrap = document.createElement('div'); texWrap.className = 'tex';
+      const tex = r.textures || [];
+      const mode = thumbMode.value;
+      const limit = mode==='first' ? Math.min(tex.length,1) : mode==='all' ? tex.length : 0;
+      for (let i=0;i<limit;i++) {
+        const p = tex[i];
+        const img = document.createElement('img');
+        img.className = 'thumb';
+        blobUrlFor(p).then(url => { if (url) img.src = url; });
+        img.title = p;
+        texWrap.appendChild(img);
+      }
+      const names = document.createElement('div');
+      names.innerHTML = tex.slice(0,5).map(t=>`<div class="mono muted nowrap" title="${escapeHtml(t)}">${escapeHtml(t)}</div>`).join('');
+      tdTex.appendChild(texWrap); tdTex.appendChild(names);
+      tr.appendChild(tdTex);
+      // source
+      const tdSrc = document.createElement('td');
+      tdSrc.textContent = r.source;
+      tr.appendChild(tdSrc);
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+    summary.textContent = `${rows.length} 件中 ${view.length} 件表示`;
+
+    // update header sort indicator
+    ths.forEach(th => {
+      const dir = th.querySelector('.dir');
+      if (!dir) return;
+      if (th.dataset.key === sortState.key) dir.textContent = sortState.asc ? '▲' : '▼';
+      else dir.textContent = '';
+    });
+  }
+
+  async function blobUrlFor(zipPath){
+    try {
+      const f = zipObj.file(zipPath);
+      if (!f) return null;
+      const blob = await f.async('blob');
+      return URL.createObjectURL(blob);
+    } catch { return null; }
+  }
+
+  // helpers
+  async function readJson(z, path){
+    try { const f = z.file(path); if (!f) return null; const txt = await f.async('string'); return JSON.parse(txt); }
+    catch { return null; }
+  }
+  async function readText(z, path){
+    try { const f = z.file(path); if (!f) return null; return await f.async('string'); }
+    catch { return null; }
+  }
+  function parseProperties(txt){
+    const out = {};
+    txt.split(/\r?\n/).forEach(line=>{
+      const s = line.trim();
+      if (!s || s.startsWith('#')) return;
+      const i = s.indexOf('='); if (i<0) return;
+      const k = s.slice(0,i).trim();
+      const v = s.slice(i+1).trim();
+      out[k] = v;
+    });
+    return out;
+  }
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"]+/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+  }
+
+  function exportCsv(data){
+    const cols = ['base','cmd','modelRef','textures','source'];
+    const lines = [cols.join(',')];
+    for (const r of data){
+      const row = [r.base, r.cmd, r.modelRef, (r.textures||[]).join('|'), r.source].map(s=>`"${String(s||'').replace(/"/g,'""')}"`).join(',');
+      lines.push(row);
+    }
+    const blob = new Blob(["\uFEFF"+lines.join('\n')], {type:'text/csv'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'cmd-index.csv'; a.click();
+  }
+  function exportJson(data){
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'cmd-index.json'; a.click();
+  }
+})();
+</script>
+</body>
+</html>
